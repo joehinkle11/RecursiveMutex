@@ -19,6 +19,8 @@ let package = Package(
             name: "RecursiveMutex",
             swiftSettings: [
                 .enableExperimentalFeature("StaticExclusiveOnly"),
+                .enableExperimentalFeature("Lifetimes"),
+                .enableExperimentalFeature("BorrowAndMutateAccessors"),
                 .unsafeFlags([
                     "-Xfrontend",
                     "-disable-availability-checking", // we should remove this flag once swift 6.4 is out and we can use Ref and MutableRef properly

@@ -31,9 +31,11 @@ public struct RecursiveMutex<Value>: @unchecked Sendable, ~Copyable where Value 
     }
 
     @usableFromInline
-    let mutex = Mutex(State())
+    let mutex = _Cell(Mutex(()))
     @usableFromInline
-    var value: _Cell<Value>
+    let state = _Cell(State())
+    @usableFromInline
+    let value: _Cell<Value>
 
     // MARK: - Init
 
@@ -42,6 +44,68 @@ public struct RecursiveMutex<Value>: @unchecked Sendable, ~Copyable where Value 
     }
 
     // MARK: - Public API
+    
+    public func lock() -> MutexGuard {
+        let currentID = currentThreadID()
+
+        let alreadyOwned: Bool = mutex._address.pointee.withLock { _ in
+            state._address.pointee.ownerThreadID == currentID
+        }
+
+        if alreadyOwned {
+            mutex._address.pointee.withLock { _ in
+                state._address.pointee.lockCount += 1
+            }
+            return MutexGuard(
+                mutexAddress: mutex._address,
+                valueAddress: value._address,
+                stateAddress: state._address
+            )
+        }
+
+        waitUntilAvailable(for: currentID)
+        return MutexGuard(
+            mutexAddress: mutex._address,
+            valueAddress: value._address,
+            stateAddress: state._address
+        )
+    }
+    
+    public struct MutexGuard: ~Copyable {
+        let mutexAddress: UnsafeMutablePointer<Mutex<()>>
+        let valueAddress: UnsafeMutablePointer<Value>
+        let stateAddress: UnsafeMutablePointer<State>
+
+        init(
+            mutexAddress: UnsafeMutablePointer<Mutex<()>>,
+            valueAddress: UnsafeMutablePointer<Value>,
+            stateAddress: UnsafeMutablePointer<State>
+        ) {
+            self.mutexAddress = mutexAddress
+            self.valueAddress = valueAddress
+            self.stateAddress = stateAddress
+        }
+        
+        public var value: Value {
+            borrowing _read {
+                yield valueAddress.pointee
+            }
+            mutating _modify {
+                yield &valueAddress.pointee
+            }
+        }
+        
+        public consuming func unlock() {}
+        
+        deinit {
+            mutexAddress.pointee._unsafeLock()
+            stateAddress.pointee.lockCount -= 1
+            if stateAddress.pointee.lockCount == 0 {
+                stateAddress.pointee.ownerThreadID = nil
+            }
+            mutexAddress.pointee._unsafeUnlock()
+        }
+    }
 
     /// Acquires the lock, runs `body`, then releases the lock.
     /// The calling thread may call this recursively without deadlocking.
@@ -55,16 +119,16 @@ public struct RecursiveMutex<Value>: @unchecked Sendable, ~Copyable where Value 
         // We must read ownerThreadID without blocking ourselves, so we
         // peek inside the mutex. If we already own it we increment
         // the count; if we don't own it we block until it's free.
-        let alreadyOwned: Bool = mutex.withLock { state in
-            state.ownerThreadID == currentID
+        let alreadyOwned: Bool = mutex._address.pointee.withLock { _ in
+            state._address.pointee.ownerThreadID == currentID
         }
 
         if alreadyOwned {
             // Re-entrant acquisition: bump the count, run, then decrement.
-            mutex.withLock { state in state.lockCount += 1 }
+            mutex._address.pointee.withLock { _ in state._address.pointee.lockCount += 1 }
             defer {
-                mutex.withLock { state in
-                    state.lockCount -= 1
+                mutex._address.pointee.withLock { _ in
+                    state._address.pointee.lockCount -= 1
                     // ownerThreadID stays set; outer lock() call will clear it.
                 }
             }
@@ -91,10 +155,10 @@ public struct RecursiveMutex<Value>: @unchecked Sendable, ~Copyable where Value 
     ) throws(E) -> sending T? {
         let currentID = currentThreadID()
 
-        let acquired: Bool = mutex.withLock { state in
-            if state.ownerThreadID == nil || state.ownerThreadID == currentID {
-                state.ownerThreadID = currentID
-                state.lockCount += 1
+        let acquired: Bool = mutex._address.pointee.withLock { _ in
+            if state._address.pointee.ownerThreadID == nil || state._address.pointee.ownerThreadID == currentID {
+                state._address.pointee.ownerThreadID = currentID
+                state._address.pointee.lockCount += 1
                 return true
             }
             return false
@@ -110,10 +174,10 @@ public struct RecursiveMutex<Value>: @unchecked Sendable, ~Copyable where Value 
     /// Spins (yielding the thread) until ownership can be claimed.
     private func waitUntilAvailable(for threadID: UInt64) {
         while true {
-            let claimed: Bool = mutex.withLock { state in
-                guard state.ownerThreadID == nil else { return false }
-                state.ownerThreadID = threadID
-                state.lockCount = 1
+            let claimed: Bool = mutex._address.pointee.withLock { _ in
+                guard state._address.pointee.ownerThreadID == nil else { return false }
+                state._address.pointee.ownerThreadID = threadID
+                state._address.pointee.lockCount = 1
                 return true
             }
             if claimed { return }
@@ -122,10 +186,10 @@ public struct RecursiveMutex<Value>: @unchecked Sendable, ~Copyable where Value 
 
     /// Decrements the lock count and clears the owner when it hits zero.
     private func release() {
-        mutex.withLock { state in
-            state.lockCount -= 1
-            if state.lockCount == 0 {
-                state.ownerThreadID = nil
+        mutex._address.pointee.withLock { _ in
+            state._address.pointee.lockCount -= 1
+            if state._address.pointee.lockCount == 0 {
+                state._address.pointee.ownerThreadID = nil
             }
         }
     }

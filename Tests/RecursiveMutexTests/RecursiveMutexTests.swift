@@ -303,3 +303,190 @@ import Foundation
     let result = lock.withLock { n -> Int in n }
     #expect(result == 50)
 }
+
+// MARK: - MutexGuard API
+
+@available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+@Test func guardReadsInitialValue() {
+    let lock = RecursiveMutex(42)
+    let g = lock.lock()
+    #expect(g.value == 42)
+    g.unlock()
+}
+
+@available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+@Test func guardWritesAndReadsValue() {
+    let lock = RecursiveMutex(0)
+    do {
+        var g = lock.lock()
+        g.value = 7
+        #expect(g.value == 7)
+        g.unlock()
+    }
+    let result = lock.withLock { n -> Int in n }
+    #expect(result == 7)
+}
+
+@available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+@Test func guardRecursiveLockReadWrite() {
+    let lock = RecursiveMutex(0)
+    var g1 = lock.lock()
+    g1.value = 1
+    var g2 = lock.lock()
+    g2.value = 2
+    #expect(g2.value == 2)
+    #expect(g1.value == 2)
+    g2.unlock()
+    #expect(g1.value == 2)
+    g1.value = 3
+    g1.unlock()
+    let result = lock.withLock { n -> Int in n }
+    #expect(result == 3)
+}
+
+@available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+@Test func guardThreeLevelRecursive() {
+    let lock = RecursiveMutex(0)
+    var g1 = lock.lock()
+    g1.value = 10
+    var g2 = lock.lock()
+    g2.value = 20
+    var g3 = lock.lock()
+    g3.value = 30
+    #expect(g3.value == 30)
+    #expect(g2.value == 30)
+    #expect(g1.value == 30)
+    g3.unlock()
+    g2.unlock()
+    g1.unlock()
+    let result = lock.withLock { n -> Int in n }
+    #expect(result == 30)
+}
+
+@available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+@Test func guardNestedInWithLock() {
+    let lock = RecursiveMutex(0)
+    lock.withLock { n in
+        n = 1
+        var g = lock.lock()
+        g.value = 2
+        #expect(g.value == 2)
+        #expect(n == 2)
+        g.unlock()
+        n = 3
+    }
+    let result = lock.withLock { n -> Int in n }
+    #expect(result == 3)
+}
+
+@available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+@Test func withLockNestedInGuard() {
+    let lock = RecursiveMutex(0)
+    var g = lock.lock()
+    g.value = 5
+    lock.withLock { n in
+        n += 10
+        #expect(n == 15)
+    }
+    #expect(g.value == 15)
+    g.unlock()
+}
+
+@available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+@Test func guardAndClosureAlternatingNesting() {
+    let lock = RecursiveMutex(0)
+    var g1 = lock.lock()
+    g1.value = 1
+    lock.withLock { n in
+        n = 2
+        var g2 = lock.lock()
+        g2.value = 3
+        lock.withLock { n in
+            n = 4
+        }
+        #expect(g2.value == 4)
+        g2.unlock()
+    }
+    #expect(g1.value == 4)
+    g1.unlock()
+    let result = lock.withLock { n -> Int in n }
+    #expect(result == 4)
+}
+
+@available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+@Test func guardMultithreadedExclusion() async {
+    let lock = RecursiveMutex(0)
+    let tasks = 10
+    let iters = 500
+
+    await withTaskGroup(of: Void.self) { group in
+        for _ in 0..<tasks {
+            group.addTask {
+                for _ in 0..<iters {
+                    var g = lock.lock()
+                    g.value = g.value + 1
+                    g.unlock()
+                }
+            }
+        }
+    }
+
+    let result = lock.withLock { n -> Int in n }
+    #expect(result == tasks * iters)
+}
+
+@available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+@Test func guardReleaseAllowsReacquisition() {
+    let lock = RecursiveMutex(0)
+    do {
+        var g = lock.lock()
+        g.value = 1
+        g.unlock()
+    }
+    do {
+        var g = lock.lock()
+        #expect(g.value == 1)
+        g.value += 1
+        g.unlock()
+    }
+    let result = lock.withLock { n -> Int in n }
+    #expect(result == 2)
+}
+
+@available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+@Test func guardThrowDoesNotDeadlock() {
+    struct E: Error {}
+    let lock = RecursiveMutex(0)
+    do {
+        var g = lock.lock()
+        g.value = 1
+        throw E()
+    } catch {}
+    var ran = false
+    lock.withLock { _ in ran = true }
+    #expect(ran)
+}
+
+@available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
+@Test func guardRecursiveIncrementsAreExact() async {
+    let lock = RecursiveMutex(0)
+    let tasks = 8
+    let depth = 3
+
+    await withTaskGroup(of: Void.self) { group in
+        for _ in 0..<tasks {
+            group.addTask {
+                func inc(d: Int) {
+                    var g = lock.lock()
+                    g.value += 1
+                    if d > 0 { inc(d: d - 1) }
+                    g.unlock()
+                }
+                inc(d: depth)
+            }
+        }
+    }
+
+    let result = lock.withLock { n -> Int in n }
+    #expect(result == tasks * (depth + 1))
+}
