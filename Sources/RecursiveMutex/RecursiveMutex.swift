@@ -1,5 +1,10 @@
 import Synchronization
+
+#if canImport(Glibc)
+import func Glibc.pthread_self
+#elseif canImport(Darwin)
 import func Foundation.pthread_threadid_np
+#endif
 
 /// A recursive mutual exclusion lock that allows the same thread to acquire
 /// the lock multiple times without deadlocking.
@@ -196,9 +201,14 @@ public struct RecursiveMutex<Value>: @unchecked Sendable, ~Copyable where Value 
 
     /// Returns a stable numeric identifier for the calling thread.
     private func currentThreadID() -> UInt64 {
+        #if canImport(Glibc)
+        return UInt64(pthread_self())
+        #elseif canImport(Darwin)
         var tid: UInt64 = 0
         pthread_threadid_np(nil, &tid)
         return tid
+        #else
+        #error("Unsupported platform: RecursiveMutex needs a thread identifier implementation.")
+        #endif
     }
 }
-
