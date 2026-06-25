@@ -33,6 +33,9 @@ public struct RecursiveMutex<Value>: @unchecked Sendable, ~Copyable where Value 
     struct State: ~Copyable {
         var ownerThreadID: UInt64? = nil
         var lockCount: Int = 0
+
+        @usableFromInline
+        init() {}
     }
 
     @usableFromInline
