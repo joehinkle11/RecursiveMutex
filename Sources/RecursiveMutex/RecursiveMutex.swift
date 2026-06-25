@@ -207,6 +207,8 @@ public struct RecursiveMutex<Value>: @unchecked Sendable, ~Copyable where Value 
         var tid: UInt64 = 0
         pthread_threadid_np(nil, &tid)
         return tid
+        #elseif arch(wasm32)
+        return 0
         #else
         #error("Unsupported platform: RecursiveMutex needs a thread identifier implementation.")
         #endif
