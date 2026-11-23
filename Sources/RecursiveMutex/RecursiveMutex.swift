@@ -2,6 +2,10 @@ import Synchronization
 
 #if canImport(Glibc)
 import func Glibc.pthread_self
+#elseif canImport(Musl)
+import func Musl.pthread_self
+#elseif canImport(Android)
+import func Android.pthread_self
 #elseif canImport(Darwin)
 import func Foundation.pthread_threadid_np
 #endif
@@ -206,6 +210,12 @@ public struct RecursiveMutex<Value>: @unchecked Sendable, ~Copyable where Value 
     private func currentThreadID() -> UInt64 {
         #if canImport(Glibc)
         return UInt64(pthread_self())
+        #elseif canImport(Musl)
+        // musl's pthread_t is a pointer.
+        return UInt64(UInt(bitPattern: pthread_self()))
+        #elseif canImport(Android)
+        // Bionic's pthread_t is a signed integer (long).
+        return UInt64(UInt(bitPattern: pthread_self()))
         #elseif canImport(Darwin)
         var tid: UInt64 = 0
         pthread_threadid_np(nil, &tid)
